@@ -6,10 +6,24 @@ by extract.sh, using the EXACT offsets from the stock PhoenixCard burn script
 
   sector 16      boot0_sdcard.fex   (SPL, BROM reads this first)
   sector 32800   boot_package.fex   (TOC0: ATF + U-Boot, sun50iw10 boot scheme)
-  sector 40960   "card_boot" start  -> sunxi_gpt.fex (protective MBR + GPT header
-                                       + partition entries), followed by each
-                                       partition's content at
-                                       40960 + <partition's first_lba from GPT>
+  sector 40960   "card_boot" start  -> sunxi_mbr.fex (Allwinner's own
+                                       proprietary partition table, magic
+                                       "softw411" - NOT a standard MBR/GPT),
+                                       followed by each partition's content at
+                                       40960 + <partition's first_lba>
+
+v1 of this script wrote sunxi_gpt.fex (a standard GPT) at the card_boot offset.
+That produced a real device that powered on (backlight lit - a hardware
+default, not something software has to enable) but showed a black screen and
+never progressed, consistent with U-Boot never finding a valid partition
+table and hanging before drawing anything. sunxi_mbr.fex has the "softw411"
+magic - Allwinner's actual proprietary partition-table format, which the
+vendor U-Boot reads natively; the GPT is very likely just a secondary/compat
+structure that isn't what the boot chain actually consults. v2 writes
+sunxi_mbr.fex instead. Partition relative offsets are taken from the GPT
+parse (already cross-validated against sys_partition.fex's declared sizes)
+since sunxi_mbr.fex encodes the identical partition layout redundantly (4x,
+every 0x4000 bytes) - only the table format written to disk changes.
 
 This is a pure repack of the STOCK firmware's own components (unmodified) - a
 sanity check that our extraction + offset understanding is correct, before we
@@ -99,8 +113,10 @@ def main():
         write_at(BOOTPKG_SECTOR, bootpkg)
         print(f"boot_package.fex   -> sector {BOOTPKG_SECTOR:10d} ({len(bootpkg)} bytes)")
 
-        write_at(CARD_BOOT_SECTOR, gpt_bytes)
-        print(f"sunxi_gpt.fex      -> sector {CARD_BOOT_SECTOR:10d} ({len(gpt_bytes)} bytes)")
+        mbr_bytes = load("sunxi_mbr.fex")
+        write_at(CARD_BOOT_SECTOR, mbr_bytes)
+        print(f"sunxi_mbr.fex      -> sector {CARD_BOOT_SECTOR:10d} ({len(mbr_bytes)} bytes) "
+              f"[vendor partition table - what U-Boot actually reads]")
 
         for part_name, filename in PARTITION_FILES.items():
             if part_name not in parts:
