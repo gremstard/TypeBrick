@@ -1,0 +1,7 @@
+firmware-extract/out/
+firmware-extract/downloads/
+buildroot-external/output/
+output/
+*.img
+*.img.gz
+.DS_Store
