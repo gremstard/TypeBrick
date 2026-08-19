@@ -20,16 +20,19 @@ table the vendor U-Boot actually reads, confirmed by decoding its per-entry
 fields and matching them to sys_partition.fex). Still black screen - same
 symptom, meaning the fix didn't reach far enough upstream to matter yet.
 
-v3 (current) moves boot0 from sector 16 to sector 256. Ground truth: Knulli's
-board/allwinner/a133/trimui-brick/genimage.cfg (they support this exact
-device with their own kernel/rootfs via the same raw-SD-boot mechanism) has
-`offset = 8192` (sector 16) explicitly present but commented out, in favor of
-`offset = 131072` (sector 256) - i.e. they hit and fixed the same issue on
-real hardware. This offset is a BROM-level fact (what the boot ROM reads
-before any OS-specific code runs), so it should hold regardless of whose
-U-Boot/OS runs afterward - unlike the partition-table format, which is
-downstream and OS-specific (Knulli uses GPT because their own U-Boot expects
-it; we keep sunxi_mbr since this repack still uses the stock U-Boot).
+v3 moved boot0 from sector 16 to sector 256 (same Knulli genimage.cfg
+evidence). Still black screen - meaning the sunxi_mbr table from v2 was
+very likely a wrong turn, not just an insufficient one.
+
+v4 (current) reverts card_boot to sunxi_gpt.fex (v1's table format) while
+KEEPING v3's boot0 fix - the one combination of {table format} x {boot0
+offset} not yet tried. Rationale: Knulli's genimage.cfg uses a standard GPT
+(`partition-table-type = "gpt"`), not any Allwinner-proprietary format, for
+this exact SoC's runtime boot. The "softw411"-magic sunxi_mbr is most likely
+PhoenixCard's own private bookkeeping for where to burn each file during
+flashing, never read back by U-Boot/the kernel at actual boot time - so v2's
+switch to it fixed nothing real, and v3's failure was still just the
+sunxi_mbr table being wrong, now stacked on a correct boot0 offset.
 
 This is a pure repack of the STOCK firmware's own components (unmodified) - a
 sanity check that our extraction + offset understanding is correct, before we
@@ -126,10 +129,9 @@ def main():
         write_at(BOOTPKG_SECTOR, bootpkg)
         print(f"boot_package.fex   -> sector {BOOTPKG_SECTOR:10d} ({len(bootpkg)} bytes)")
 
-        mbr_bytes = load("sunxi_mbr.fex")
-        write_at(CARD_BOOT_SECTOR, mbr_bytes)
-        print(f"sunxi_mbr.fex      -> sector {CARD_BOOT_SECTOR:10d} ({len(mbr_bytes)} bytes) "
-              f"[vendor partition table - what U-Boot actually reads]")
+        write_at(CARD_BOOT_SECTOR, gpt_bytes)
+        print(f"sunxi_gpt.fex      -> sector {CARD_BOOT_SECTOR:10d} ({len(gpt_bytes)} bytes) "
+              f"[standard GPT - what Knulli's confirmed-working config uses]")
 
         for part_name, filename in PARTITION_FILES.items():
             if part_name not in parts:
