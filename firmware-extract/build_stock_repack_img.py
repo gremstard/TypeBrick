@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
 Reassemble a bootable raw SD card image from the stock-firmware items extracted
-by extract.sh, using the EXACT offsets from the stock PhoenixCard burn script
-(cardscript.fex, found inside the firmware itself):
+by extract.sh. Sector layout, and the history of getting it right:
 
-  sector 16      boot0_sdcard.fex   (SPL, BROM reads this first)
+  sector 256     boot0_sdcard.fex   (SPL, BROM reads this first)
   sector 32800   boot_package.fex   (TOC0: ATF + U-Boot, sun50iw10 boot scheme)
   sector 40960   "card_boot" start  -> sunxi_mbr.fex (Allwinner's own
                                        proprietary partition table, magic
@@ -12,18 +11,25 @@ by extract.sh, using the EXACT offsets from the stock PhoenixCard burn script
                                        followed by each partition's content at
                                        40960 + <partition's first_lba>
 
-v1 of this script wrote sunxi_gpt.fex (a standard GPT) at the card_boot offset.
-That produced a real device that powered on (backlight lit - a hardware
-default, not something software has to enable) but showed a black screen and
-never progressed, consistent with U-Boot never finding a valid partition
-table and hanging before drawing anything. sunxi_mbr.fex has the "softw411"
-magic - Allwinner's actual proprietary partition-table format, which the
-vendor U-Boot reads natively; the GPT is very likely just a secondary/compat
-structure that isn't what the boot chain actually consults. v2 writes
-sunxi_mbr.fex instead. Partition relative offsets are taken from the GPT
-parse (already cross-validated against sys_partition.fex's declared sizes)
-since sunxi_mbr.fex encodes the identical partition layout redundantly (4x,
-every 0x4000 bytes) - only the table format written to disk changes.
+v1 wrote sunxi_gpt.fex (a standard GPT) at the card_boot offset, and boot0 at
+sector 16 (per cardscript.fex, the stock PhoenixCard burn script's declared
+"start=16"). Black screen, backlight on, never progressed.
+
+v2 switched card_boot to sunxi_mbr.fex (the "softw411"-magic proprietary
+table the vendor U-Boot actually reads, confirmed by decoding its per-entry
+fields and matching them to sys_partition.fex). Still black screen - same
+symptom, meaning the fix didn't reach far enough upstream to matter yet.
+
+v3 (current) moves boot0 from sector 16 to sector 256. Ground truth: Knulli's
+board/allwinner/a133/trimui-brick/genimage.cfg (they support this exact
+device with their own kernel/rootfs via the same raw-SD-boot mechanism) has
+`offset = 8192` (sector 16) explicitly present but commented out, in favor of
+`offset = 131072` (sector 256) - i.e. they hit and fixed the same issue on
+real hardware. This offset is a BROM-level fact (what the boot ROM reads
+before any OS-specific code runs), so it should hold regardless of whose
+U-Boot/OS runs afterward - unlike the partition-table format, which is
+downstream and OS-specific (Knulli uses GPT because their own U-Boot expects
+it; we keep sunxi_mbr since this repack still uses the stock U-Boot).
 
 This is a pure repack of the STOCK firmware's own components (unmodified) - a
 sanity check that our extraction + offset understanding is correct, before we
@@ -43,8 +49,15 @@ import struct
 import sys
 
 SECTOR = 512
-BOOT0_SECTOR = 16
-BOOTPKG_SECTOR = 32800
+BOOT0_SECTOR = 256  # NOT 16, despite cardscript.fex saying start=16 - confirmed via
+                    # Knulli's board/allwinner/a133/trimui-brick/genimage.cfg, which
+                    # has offset=8192 (sector 16) explicitly commented out and unused
+                    # in favor of offset=131072 (sector 256) on real hardware for
+                    # this exact board. v1/v2 of this script used sector 16 and
+                    # produced a device that powered on (backlight, hardware default)
+                    # but never progressed past a black screen - consistent with BROM
+                    # not finding a valid boot0 at the wrong offset.
+BOOTPKG_SECTOR = 32800  # confirmed matching Knulli's genimage.cfg (16,793,600 bytes)
 CARD_BOOT_SECTOR = 40960
 
 PARTITION_FILES = {
